@@ -1,14 +1,3 @@
-/*
- * mm-naive.c - The fastest, least memory-efficient malloc package.
- *
- * In this naive approach, a block is allocated by simply incrementing
- * the brk pointer.  A block is pure payload. There are no headers or
- * footers.  Blocks are never coalesced or reused. Realloc is
- * implemented directly using mm_malloc and mm_free.
- *
- * NOTE TO STUDENTS: Replace this header comment with your own header
- * comment that gives a high level description of your solution.
- */
 #include "mm.h"
 
 #include <assert.h>
@@ -19,14 +8,11 @@
 
 #include "memlib.h"
 
-/*********************************************************
- * NOTE TO STUDENTS: Before you do anything else, please
- * provide your team information in the following struct.
- ********************************************************/
+
 team_t team = {
-    "hyeRexx",    /* Team name */
+    "hyeRexx : Explicit",    /* Team name */
     "Hyerin Seok",/* First member's full name */
-    "bovik@cs.cmu.edu",/* First member's email address */
+    "caco3.rinrin@gmail.com",/* First member's email address */
     "", /* Second member's full name (leave blank if none) */
     ""};/* Second member's email address (leave blank if none) */
 
@@ -40,7 +26,7 @@ team_t team = {
 
 #define WSIZE 4                                                         // 헤더, 풋터 사이즈 word
 #define DSIZE 8                                                         // 페이로드 사이즈 단위, double word
-#define CHUNKSIZE (1<<12)                                             // 힙 확장 단위 
+#define CHUNKSIZE (1<<12)                                               // 힙 확장 단위 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define PACK(size, alloc) ((size) | (alloc))                            // 사이즈와 할당 여부 리턴
 #define GET(p) (*(unsigned int *)(p))
@@ -52,29 +38,66 @@ team_t team = {
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp)-WSIZE)))   // 다음 블럭 포인터
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp)-DSIZE)))   // 이전 블럭 포인터
 
-/*
- * mm_init - initialize the malloc package.
- */
+// [added] explicit macro
+#define ROOT (*(void **)(heap_listp))
+#define GET_ROOT (GET(ROOT))
+
+#define GET_P_PTR(bp) ((void *)(bp) + WSIZE)           // *next에서 *prev로 이동
+#define NEXT_FREE(bp) (*(void **)(bp))                 // *NEXT에 담긴 주소값이 가리키는 값으로 이동 : next free bp
+#define PREV_FREE(bp) (*(void **)(GET_P_BLKP(bp)))     // *PREV에 담긴 주소값이 가리키는 값으로 이동 : prev free bp
+#define SET_ROOT(bp) (PUT(ROOT, bp))                   // ROOT를 bp로 설정함
+#define SET_PREV(bp, val) (PUT(GET_P_PTR(bp), val))    // PREV를 val로 설정함
+#define SET_NEXT(bp, val) (PUT(bp, val))               // NEXT를 val로 설정함
+
+// prototype
 static void *extend_heap(size_t words);
+static void *coalesce(void *bp);
+static void *find_fit(size_t asize);
+static void place(void *bp, size_t asize);
 
 static void *heap_listp;  // 프롤로그 블럭 포인터
 
 int mm_init(void) { 
-    if((heap_listp = mem_sbrk(4*WSIZE)) == (void *)-1) {
+    if((heap_listp = mem_sbrk(6*WSIZE)) == (void *)-1) { // 패딩 1, 헤더 1, 페이로드 2, 풋터 1, 에필로그 1
         return -1;
     }
 
     PUT(heap_listp, 0);                            // 미사용 패딩 블럭
     PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1)); // 프롤로그 헤더 (자기 블럭의 전체 용량을 말함 ~PACK)
-    PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); // 프롤로그 풋터 (자기 블럭의 전체 용량을 말함 ~PACK)
-    PUT(heap_listp + (3 * WSIZE), PACK(0, 1));      // 에필로그 블럭
-    heap_listp += (2 * WSIZE);                     // 힙포인터를 프롤로그 풋터 뒤로 옮김.
+    PUT(heap_listp + (2 * WSIZE), 0);              // 프롤로그 페이로드 : PREV PTR
+    PUT(heap_listp + (3 * WSIZE), 0);              // 프롤로그 페이로드 : NEXT PTR
+    PUT(heap_listp + (4 * WSIZE), PACK(DSIZE, 1)); // 프롤로그 풋터 (자기 블럭의 전체 용량을 말함 ~PACK)
+    PUT(heap_listp + (5 * WSIZE), PACK(0, 1));     // 에필로그 블럭
+    heap_listp += (2 * WSIZE);                     // heap_listp == bp == NEXT로 초기화
 
     if(extend_heap(CHUNKSIZE / WSIZE) == NULL) {
         return -1;
     }
 
     return 0;
+}
+
+static void *extend_heap(size_t words) {
+    char *bp;
+    size_t size;
+
+    size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
+    if ((long)(bp = mem_sbrk(size)) == -1) {
+        return NULL;
+    }
+
+    // 헤더, 풋터 세팅
+    PUT(HDRP(bp), PACK(size, 0));
+    PUT(FTRP(bp), PACK(size, 0));
+
+    // PREV FREE, NEXT FREE 처리
+    SET_NEXT(bp, GET_ROOT); // bp의 NEXT로 기존 ROOT 세팅
+    SET_PREV(GET_P_PTR(NEXT_FREE(bp)), GET_ROOT); // 기존 ROOT의 PREV를 지금 ROOT로 변경
+    SET_ROOT(bp); // bp를 ROOT로 잡음
+
+    PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));  // 에필로그 처리
+
+    return coalesce(bp);
 }
 
 // [added]
@@ -91,13 +114,19 @@ static void *coalesce(void *bp) {
         size += GET_SIZE(HDRP(NEXT_BLKP(bp))); // 현재 블록의 사이즈와 다음 블록 사이즈 더하기
         PUT(HDRP(bp), PACK(size, 0));   // 헤더 새로 할당한 사이즈 정보로 업데이트
         PUT(FTRP(bp), PACK(size, 0));   // 풋터 새로 할당한 사이즈 정보로 업데이트
+
+        // prev 유지, next 결합한 뒷블럭의 next로 교체
+        SET_NEXT(bp, NEXT_FREE(NEXT_BLKP(bp)));    // 이 블럭의 NEXT를 더한 블록의 NEXT로 교체
     }
 
     else if (!prev_alloc && next_alloc) {   // Case 3: prev 가용, next 할당
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(FTRP(bp), PACK(size, 0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-        bp = PREV_BLKP(bp);
+
+        // 이전 블럭 next 수정, prev는 유지해도 오케이
+        SET_NEXT(PREV_BLKP(bp), NEXT_FREE(bp)); // 이전 블럭의 next를 이 블럭의 next로 잡음
+        bp = PREV_BLKP(bp);        
     }
 
     else {
@@ -157,11 +186,7 @@ static void place(void *bp, size_t asize) {
     }
 }
 
-
-/*
- * mm_malloc - Allocate a block by incrementing the brk pointer.
- *     Always allocate a block whose size is a multiple of the alignment.
- */
+// Allocate memory
 void *mm_malloc(size_t size) {
     size_t asize;
     size_t extendsize;
@@ -202,8 +227,11 @@ void mm_free(void *bp) { //매개변수명 ptr에서 bp로 수정함
     PUT(HDRP(bp), PACK(size, 0)); // 헤더에 PACK을 반영, 이 블럭을 free 상태로 수정
     PUT(FTRP(bp), PACK(size, 0)); // 풋터에 PACK을 반영, 이 블럭을 free 상태로 수정
 
-    //*******재확인
-    coalesce(bp); // 인접한 가용 영역과 통합 ~근데 이거 매번 하는거 아니라고 하지 않았나..
+    SET_NEXT(bp, GET_ROOT);  // bp의 NEXT로 기존 ROOT 세팅
+    SET_PREV(GET_P_PTR(NEXT_FREE(bp)), GET_ROOT);  // 기존 ROOT의 PREV를 지금 ROOT로 변경
+    SET_ROOT(bp);        // bp를 ROOT로 잡음
+
+    coalesce(bp);
 }
 
 /*
